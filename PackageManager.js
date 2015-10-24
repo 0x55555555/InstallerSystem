@@ -4,6 +4,7 @@ var fs = require('fs'),
     path = require('path'),
     rimraf = require('rimraf'),
     tar = require('tar-fs'),
+    async = require('async'),
     hashFiles = require('hash-files'),
     randomstring = require('randomstring');
 
@@ -17,20 +18,23 @@ let try_make_dir = function(path, cb) {
 let package_info_name = 'package_info.json';
 class Package
 {
-  constructor(containing_folder, name, version)
-  {
+  constructor(containing_folder, name, version) {
     this.name = name;
     this.version = version;
     this.container = containing_folder;
-    this.path = this.expected_path()
+    this.path = this.expected_path();
+    this.extra_keys = { };
   }
 
-  save_info(cb)
-  {
+  save_info(cb) {
     let obj = {
       name: this.name,
-      version: this.version,
+      version: this.version
     };
+
+    for (var key in this.extra_keys) {
+      obj[key] = this.extra_keys[key];
+    }
 
     fs.writeFile(
       path.join(this.path, package_info_name),
@@ -39,8 +43,7 @@ class Package
     );
   }
 
-  load_info(cb)
-  {
+  load_info(cb) {
     fs.readFile(
       path.join(this.path, package_info_name),
       (err, data) => {
@@ -48,6 +51,10 @@ class Package
         cb(err, JSON.parse(data));
       }
     );
+  }
+
+  set(key, value) {
+    this.extra_keys[key] = value;
   }
 
   relocate(name, version, cb)
@@ -68,8 +75,8 @@ class Package
 
   hash(cb) {
     let glob = path.join(this.path, '**');
-    hashFiles({ files: [ glob ] }, function(error, hash) {
-      cb(hash);
+    hashFiles({ files: [ glob ] }, function(err, hash) {
+      cb(err, hash);
     });
   }
 
@@ -100,7 +107,7 @@ class Package
     str.on('finish', () => {
       pkg.load_info((err, info) => {
         pkg.relocate(info.name, info.version, () => {
-          pkg.hash((new_hash) => {
+          pkg.hash((err, new_hash) => {
             if (new_hash != hash) {
               return cb({
                 expected_hash: hash,
@@ -127,20 +134,65 @@ class Manager
   }
 
   available_local_packages(cb) {
+    let that = this;
     fs.readdir(this.package_dir, function(err, files) {
       if (err) {
         return cb(err);
       }
-      cb(err, files);
+
+      async.map(
+        files,
+        (file, cb) => {
+          that.available_local_versions(file, cb);
+        },
+        (err, results) => {
+          var pkgs = [];
+          for (var p in results) {
+            pkgs = pkgs.concat(results[p]);
+          }
+          cb(err, pkgs);
+        }
+      );
     });
   }
 
   available_local_versions(pkg, cb) {
-    fs.readdir(path.join(this.package_dir, pkg), function(err, files) {
+    let that = this;
+    fs.readdir(path.join(this.package_dir, pkg), function(err, versions) {
       if (err) {
         return cb(err);
       }
-      cb(err, files);
+
+      async.map(
+        versions,
+        (version, cb) => {
+          cb(err, new Package(that.package_dir, pkg, version));
+        },
+        (err, pkgs) => {
+          cb(err, pkgs);
+        }
+      );
+    });
+  }
+
+  pack(name, version, pkgs) {
+    this.create_package(name, version, (err, packed_pkg) => {
+      async.map(
+        pkgs,
+        (pkg, cb) => {
+          let pkg_path = path.join(packed_pkg.path, pkg.name + '_' + pkg.version + '.tar');
+          let str = pkg.pack().pipe(fs.createWriteStream(pkg_path));
+          str.on('finish', () => {
+            pkg.hash((err, hash) => {
+              cb(null, { file: pkg_path, hash: hash });
+            });
+          });
+        },
+        (err, results) => {
+          packed_pkg.set('sub_packages', results);
+          packed_pkg.save_info();
+        }
+      );
     });
   }
 
@@ -150,6 +202,10 @@ class Manager
 
   load_packed_package(hash, stream, cb) {
     return Package.load_packed(this.package_dir, hash, stream, cb);
+  }
+
+  get_package(name, version) {
+    return new Package(this.package_dir, name, version)
   }
 }
 
