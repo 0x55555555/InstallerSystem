@@ -20,5 +20,11 @@
 	"preInstall": null,
 	"library": true,
 	"fs_reach_sources": true,
-	"native": true
+	"native": true,
+  "devDependencies": {
+    "babel": "^5.8.23",
+    "chai": "^3.3.0",
+    "gulp": "^3.9.0",
+    "gulp-mocha": "^2.1.3"
+  }
 }
