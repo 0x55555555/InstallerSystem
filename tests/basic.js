@@ -4,6 +4,7 @@ let expect = require('chai').expect,
   path = require('path'),
   fs = require('fs'),
   async = require('async'),
+  zlib = require('zlib'),
   PackageManager = require('../PackageManager')
 
 let to_test_data_dir = path.join('tests', 'data');
@@ -141,7 +142,7 @@ describe('package_manager', function() {
         cb(null, hash, tar_path)
       },
       (hash, path, cb) => {
-        pm.load_packed_package(hash, fs.createReadStream(path), (err, pkg) => {
+        pm.load_packed_package({ hash: hash }, fs.createReadStream(path), (err, pkg) => {
           pkg.load_info((err, info) => {
             expect(info.name).to.equal('a');
             expect(info.version).to.equal('0.0');
@@ -173,10 +174,71 @@ describe('package_manager', function() {
         pm.get_package('c', '1.0')
       ];
 
-      pm.pack("combined", '0.0', found_pkgs);
-
-      done();
+      let out_path = path.join(test_dir, 'out.tar');
+      pm.combine("combined", '0.0', found_pkgs, (err, pkg) => {
+        done();
+      });
     });
+  });
+
+  it('load diff packages', function(done) {
+    let test_dir = make_test_dir('load_diff_packages');
+    let pm = PackageManager(test_dir);
+    var gzip = zlib.createGzip();
+    var gunzip = zlib.createGunzip();
+
+    async.waterfall([
+      (cb) => {
+        pm.create_package("a", "0.0", cb);
+      },
+      (pkg0, cb) => {
+        pm.create_package("a", "1.0", (err, pkg1) => {
+
+          pkg1.hash((err, hash) => {
+            cb(null, pkg0, pkg1, hash);
+          });
+        });
+      },
+      (pkg0, pkg1, pkg1_hash, cb) => {
+        async.map(
+          [ pkg0, pkg1 ],
+          (pkg, cb) => {
+            let dest_path = path.join(test_dir, 'test_pork_' + pkg.version + '.tar');
+            let str = pkg.pack().pipe(fs.createWriteStream(dest_path));
+            str.on('finish', () => { cb(null, { package: pkg, packed_tar: dest_path }) });
+          },
+          (err, results) => {
+            let dest_path = path.join(test_dir, 'test_pork.tar.diff');
+            pm.diff(
+              fs.createReadStream(results[0].packed_tar),
+              fs.createReadStream(results[1].packed_tar),
+              (err, stream) => {
+                let str = stream.pipe(gzip).pipe(fs.createWriteStream(dest_path));
+                str.on('finish', () => { cb(null, results[0].packed_tar, dest_path, pkg1_hash); });
+              }
+            );
+          }
+        );
+      },
+      (original_tar, diff, pkg1_hash, cb) => {
+        pm.remove_package('a', '1.0', () => {
+
+          pm.undiff(
+            { hash: pkg1_hash },
+            fs.createReadStream(original_tar),
+            fs.createReadStream(diff).pipe(gunzip),
+            (err, stream) => {
+              pm.load_packed_package({ hash: pkg1_hash }, stream, (err, pkg) => {
+                expect(pkg.name).to.equal('a');
+                expect(pkg.version).to.equal('1.0');
+              });
+              cb();
+            }
+          );
+          cb();
+        });
+      }
+    ], () => done());
   });
 
 });

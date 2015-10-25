@@ -6,13 +6,30 @@ var fs = require('fs'),
     tar = require('tar-fs'),
     async = require('async'),
     hashFiles = require('hash-files'),
-    randomstring = require('randomstring');
+    randomstring = require('randomstring'),
+    bsdiff = require('bsdiff4'),
+    temp = require('temp'),
+    toArray = require('stream-to-array'),
+    bson = require('bson'),
+    streamifier = require('streamifier');
 
 let try_make_dir = function(path, cb) {
   mkdirp(path, null, (err) => {
     if (err && err.code != 'EEXIST') { cb(err); }
     cb();
   });
+}
+
+let stream_to_buffer = function(stream, cb) {
+  toArray(stream)
+    .then(function (parts) {
+      var buffers = []
+      for (var i = 0, l = parts.length; i < l ; ++i) {
+        var part = parts[i]
+        buffers.push((part instanceof Buffer) ? part : new Buffer(part))
+      }
+      cb(null, Buffer.concat(buffers));
+    })
 }
 
 let package_info_name = 'package_info.json';
@@ -82,7 +99,7 @@ class Package
 
   pack()
   {
-    return tar.pack(this.path)
+    return require('tar-fs').pack(this.path)
   }
 
   expected_path()
@@ -100,15 +117,15 @@ class Package
     });
   }
 
-  static load_packed(containing_folder, hash, stream, cb)
+  static load_packed(containing_folder, options, stream, cb)
   {
-    let pkg = new Package(containing_folder, randomstring.generate(), '0.0')
-    let str = stream.pipe(tar.extract(pkg.path));
+    let pkg = new Package(containing_folder, randomstring.generate(), '0.0');
+    let str = stream.pipe(require('tar-fs').extract(pkg.path));
     str.on('finish', () => {
       pkg.load_info((err, info) => {
         pkg.relocate(info.name, info.version, () => {
           pkg.hash((err, new_hash) => {
-            if (new_hash != hash) {
+            if (options.hash && new_hash != options.hash) {
               return cb({
                 expected_hash: hash,
                 real_hash: new_hash
@@ -175,7 +192,7 @@ class Manager
     });
   }
 
-  pack(name, version, pkgs) {
+  combine(name, version, pkgs, cb) {
     this.create_package(name, version, (err, packed_pkg) => {
       async.map(
         pkgs,
@@ -190,18 +207,63 @@ class Manager
         },
         (err, results) => {
           packed_pkg.set('sub_packages', results);
-          packed_pkg.save_info();
+          packed_pkg.save_info((err) => {
+            cb(err, packed_pkg);
+          });
         }
       );
     });
+  }
+
+  diff(tar_old_str, tar_new_str, cb) {
+    async.map(
+      [tar_old_str, tar_new_str],
+      (str, cb) => { stream_to_buffer(str, cb) },
+      (err, results) => {
+        bsdiff.diff(results[0], results[1], (err, control, diff, extra) => {
+          let output = {
+            l: results[1].length,
+            c: control,
+            d: diff,
+            e: extra
+          }
+          var BSON = new bson.BSONPure.BSON();
+          let serialised = BSON.serialize(output, false, true, false);
+          cb(err, streamifier.createReadStream(serialised));
+        });
+      }
+    );
+  }
+
+  undiff(options, tar_old_str, tar_diff_str, cb) {
+    async.map(
+      [tar_old_str, tar_diff_str],
+      (str, cb) => { stream_to_buffer(str, cb) },
+      (err, results) => {
+        var BSON = new bson.BSONPure.BSON();
+        var diff_data = BSON.deserialize(results[1]);
+
+        bsdiff.patch(results[0], diff_data.l, diff_data.c, diff_data.d.buffer, diff_data.e.buffer,
+          (err, outData) => {
+            cb(err, streamifier.createReadStream(outData));
+          }
+        );
+      }
+    );
   }
 
   create_package(name, version, cb) {
     return Package.create(this.package_dir, name, version, cb);
   }
 
-  load_packed_package(hash, stream, cb) {
-    return Package.load_packed(this.package_dir, hash, stream, cb);
+  remove_package(name, version, cb) {
+    let pkg = this.get_package(name, version);
+
+    rimraf(pkg.path, cb);
+  }
+
+  load_packed_package(options, stream, cb) {
+    return Package.load_packed(this.package_dir, options, stream, cb);
   }
 
   get_package(name, version) {
