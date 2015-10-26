@@ -139,6 +139,41 @@ class Package
   }
 }
 
+class VersionManager
+{
+  VersionManager(dir) {
+    this.package_dir = dir;
+  }
+
+  installed_versions(pkg, cb) {
+    let that = this;
+    fs.readdir(path.join(this.package_dir, pkg), function(err, files) {
+      if (err) {
+        return cb(err);
+      }
+
+      async.filter(
+        files,
+        (file, cb) => {
+          fs.lstat(path.join(that.package_dir, file), (err, stats) => {
+            cb(null, stats.isDirectory());
+          });
+        },
+        (err, versions) => {
+          async.map(
+            versions,
+            (version, cb) => {
+              cb(err, new Package(that.package_dir, pkg, version));
+            },
+            (err, pkgs) => {
+              cb(err, pkgs);
+            }
+          );
+        });
+    });
+  }
+}
+
 class Manager
 {
   constructor(dir, cb)
@@ -160,34 +195,9 @@ class Manager
       async.map(
         files,
         (file, cb) => {
-          that.available_local_versions(file, cb);
+          cb(null, new VersionManager(file));
         },
-        (err, results) => {
-          var pkgs = [];
-          for (var p in results) {
-            pkgs = pkgs.concat(results[p]);
-          }
-          cb(err, pkgs);
-        }
-      );
-    });
-  }
-
-  available_local_versions(pkg, cb) {
-    let that = this;
-    fs.readdir(path.join(this.package_dir, pkg), function(err, versions) {
-      if (err) {
-        return cb(err);
-      }
-
-      async.map(
-        versions,
-        (version, cb) => {
-          cb(err, new Package(that.package_dir, pkg, version));
-        },
-        (err, pkgs) => {
-          cb(err, pkgs);
-        }
+        cb
       );
     });
   }
