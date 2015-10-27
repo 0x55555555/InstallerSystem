@@ -69,7 +69,7 @@ describe('package_manager', function() {
     ], (err, results) => {
       async.parallel([
         (cb) => {
-          pm.available_local_packages((err, pkgs) => {
+          a_pkgs.installed_versions((err, pkgs) => {
             expect(pkgs.length).to.eql(5);
             expect(pkgs[0].name).to.eql('a');
             expect(pkgs[0].version).to.eql('0.0');

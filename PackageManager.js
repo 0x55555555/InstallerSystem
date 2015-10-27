@@ -145,7 +145,7 @@ class VersionManager
     this.package_dir = dir;
   }
 
-  installed_versions(pkg, cb) {
+  installed_versions(cb) {
     let that = this;
     fs.readdir(path.join(this.package_dir, pkg), function(err, files) {
       if (err) {
