@@ -141,29 +141,36 @@ class Package
 
 class VersionManager
 {
-  VersionManager(dir) {
+  constructor(dir, name) {
     this.package_dir = dir;
+    this.name = name;
+  }
+
+  get_version(version) {
+    return Package(this.package_dir, this.name, version);
   }
 
   installed_versions(cb) {
     let that = this;
-    fs.readdir(path.join(this.package_dir, pkg), function(err, files) {
+    fs.readdir(path.join(this.package_dir, this.name), function(err, versions) {
       if (err) {
         return cb(err);
       }
 
       async.filter(
-        files,
-        (file, cb) => {
-          fs.lstat(path.join(that.package_dir, file), (err, stats) => {
+        versions,
+        (version, cb) => {
+          fs.lstat(path.join(that.package_dir, that.name, version), (err, stats) => {
+            console.log("pork", path.join(that.package_dir, that.name, version), stats.isDirectory())
             cb(null, stats.isDirectory());
           });
         },
         (err, versions) => {
+          console.log("got", err, versions);
           async.map(
             versions,
             (version, cb) => {
-              cb(err, new Package(that.package_dir, pkg, version));
+              cb(err, new Package(that.package_dir, that.name, version));
             },
             (err, pkgs) => {
               cb(err, pkgs);
@@ -185,7 +192,7 @@ class Manager
     });
   }
 
-  available_local_packages(cb) {
+  installed_packages(cb) {
     let that = this;
     fs.readdir(this.package_dir, function(err, files) {
       if (err) {
@@ -195,7 +202,7 @@ class Manager
       async.map(
         files,
         (file, cb) => {
-          cb(null, new VersionManager(file));
+          cb(null, new VersionManager(that.package_dir, file));
         },
         cb
       );
@@ -276,8 +283,8 @@ class Manager
     return Package.load_packed(this.package_dir, options, stream, cb);
   }
 
-  get_package(name, version) {
-    return new Package(this.package_dir, name, version)
+  get_package(name) {
+    return new VersionManager(this.package_dir, name)
   }
 }
 

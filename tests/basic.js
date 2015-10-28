@@ -69,23 +69,18 @@ describe('package_manager', function() {
     ], (err, results) => {
       async.parallel([
         (cb) => {
-          a_pkgs.installed_versions((err, pkgs) => {
-            expect(pkgs.length).to.eql(5);
+          pm.installed_packages((err, pkgs) => {
+            expect(pkgs.length).to.eql(3);
             expect(pkgs[0].name).to.eql('a');
-            expect(pkgs[0].version).to.eql('0.0');
             expect(pkgs[1].name).to.eql('b');
-            expect(pkgs[1].version).to.eql('0.0');
-            expect(pkgs[2].name).to.eql('b');
-            expect(pkgs[2].version).to.eql('0.1');
-            expect(pkgs[3].name).to.eql('b');
-            expect(pkgs[3].version).to.eql('0.2');
-            expect(pkgs[4].name).to.eql('c');
-            expect(pkgs[4].version).to.eql('1.0');
+            expect(pkgs[2].name).to.eql('c');
             cb();
           });
         },
         (cb) => {
-          pm.available_local_versions('a', (err, pkgs) => {
+          let a_pkgs = pm.get_package('a');
+          a_pkgs.installed_versions((err, pkgs) => {
+            console.log(pkgs);
             expect(pkgs.length).to.eql(1);
             expect(pkgs[0].name).to.eql('a');
             expect(pkgs[0].version).to.eql('0.0');
@@ -93,7 +88,8 @@ describe('package_manager', function() {
           });
         },
         (cb) => {
-          pm.available_local_versions('c', (err, pkgs) => {
+          let c_pkgs = pm.get_package('c');
+          c_pkgs.installed_versions((err, pkgs) => {
             expect(pkgs.length).to.eql(1);
             expect(pkgs[0].name).to.eql('c');
             expect(pkgs[0].version).to.eql('1.0');
@@ -101,7 +97,8 @@ describe('package_manager', function() {
           });
         },
         (cb) => {
-          pm.available_local_versions('b', (err, pkgs) => {
+          let b_pkgs = pm.get_package('b');
+          b_pkgs.installed_versions((err, pkgs) => {
             expect(pkgs.length).to.eql(3);
             expect(pkgs[0].name).to.eql('b');
             expect(pkgs[0].version).to.eql('0.0');
@@ -119,7 +116,7 @@ describe('package_manager', function() {
     });
   });
 
-  it('pack packages', function(done) {
+  /*it('pack packages', function(done) {
     let test_dir = make_test_dir('pack_packages');
     let pm = PackageManager(test_dir);
 
@@ -169,9 +166,9 @@ describe('package_manager', function() {
       }
     ], (err, pkgs) => {
       let found_pkgs = [
-        pm.get_package('a', '0.0'),
-        pm.get_package('b', '0.0'),
-        pm.get_package('c', '1.0')
+        pm.get_package('a').get_version('0.0'),
+        pm.get_package('b').get_version('0.0'),
+        pm.get_package('c').get_version('1.0')
       ];
 
       let out_path = path.join(test_dir, 'out.tar');
@@ -239,6 +236,6 @@ describe('package_manager', function() {
         });
       }
     ], () => done());
-  });
+  });*/
 
 });
