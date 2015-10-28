@@ -80,7 +80,6 @@ describe('package_manager', function() {
         (cb) => {
           let a_pkgs = pm.get_package('a');
           a_pkgs.installed_versions((err, pkgs) => {
-            console.log(pkgs);
             expect(pkgs.length).to.eql(1);
             expect(pkgs[0].name).to.eql('a');
             expect(pkgs[0].version).to.eql('0.0');
@@ -116,7 +115,7 @@ describe('package_manager', function() {
     });
   });
 
-  /*it('pack packages', function(done) {
+  it('pack packages', function(done) {
     let test_dir = make_test_dir('pack_packages');
     let pm = PackageManager(test_dir);
 
@@ -218,7 +217,7 @@ describe('package_manager', function() {
         );
       },
       (original_tar, diff, pkg1_hash, cb) => {
-        pm.remove_package('a', '1.0', () => {
+        pm.get_package('a').get_version('1.0').remove(() => {
 
           pm.undiff(
             { hash: pkg1_hash },
@@ -236,6 +235,6 @@ describe('package_manager', function() {
         });
       }
     ], () => done());
-  });*/
+  });
 
 });

@@ -70,6 +70,10 @@ class Package
     );
   }
 
+  remove(cb) {
+    rimraf(this.path, cb);
+  }
+
   set(key, value) {
     this.extra_keys[key] = value;
   }
@@ -147,7 +151,7 @@ class VersionManager
   }
 
   get_version(version) {
-    return Package(this.package_dir, this.name, version);
+    return new Package(this.package_dir, this.name, version);
   }
 
   installed_versions(cb) {
@@ -161,12 +165,10 @@ class VersionManager
         versions,
         (version, cb) => {
           fs.lstat(path.join(that.package_dir, that.name, version), (err, stats) => {
-            console.log("pork", path.join(that.package_dir, that.name, version), stats.isDirectory())
-            cb(null, stats.isDirectory());
+            cb(stats.isDirectory());
           });
         },
-        (err, versions) => {
-          console.log("got", err, versions);
+        (versions) => {
           async.map(
             versions,
             (version, cb) => {
@@ -271,12 +273,6 @@ class Manager
 
   create_package(name, version, cb) {
     return Package.create(this.package_dir, name, version, cb);
-  }
-
-  remove_package(name, version, cb) {
-    let pkg = this.get_package(name, version);
-
-    rimraf(pkg.path, cb);
   }
 
   load_packed_package(options, stream, cb) {
