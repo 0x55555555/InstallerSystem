@@ -4,6 +4,7 @@ var fs = require('fs'),
     path = require('path'),
     rimraf = require('rimraf'),
     tar = require('tar-fs'),
+    zlib = require('zlib'),
     async = require('async'),
     hashFiles = require('hash-files'),
     randomstring = require('randomstring'),
@@ -101,9 +102,18 @@ class Package
     });
   }
 
-  pack()
+  packed_path() {
+    return path.join(this.container, this.name, this.version + ".pkg");
+  }
+
+  pack(cb)
   {
-    return require('tar-fs').pack(this.path)
+    this.hash((err, hash) => {
+      var gzip = zlib.createGzip();
+      let packed = require('tar-fs').pack(this.path).pipe(gzip);
+      let str = packed.pipe(fs.createWriteStream(this.packed_path()));
+      str.on('finish', () => { cb(null, hash, this.packed_path()) });
+    });
   }
 
   expected_path()
@@ -124,7 +134,8 @@ class Package
   static load_packed(containing_folder, options, stream, cb)
   {
     let pkg = new Package(containing_folder, randomstring.generate(), '0.0');
-    let str = stream.pipe(require('tar-fs').extract(pkg.path));
+    var gunzip = zlib.createGunzip();
+    let str = stream.pipe(gunzip).pipe(require('tar-fs').extract(pkg.path));
     str.on('finish', () => {
       pkg.load_info((err, info) => {
         pkg.relocate(info.name, info.version, () => {
@@ -217,9 +228,10 @@ class Manager
         pkgs,
         (pkg, cb) => {
           let pkg_path = path.join(packed_pkg.path, pkg.name + '_' + pkg.version + '.tar');
-          let str = pkg.pack().pipe(fs.createWriteStream(pkg_path));
-          str.on('finish', () => {
-            pkg.hash((err, hash) => {
+          pkg.pack((err, hash, pkg_path) => {
+            // copy into the master directory
+            let pipe = fs.createReadStream(pkg_path).pipe(fs.createWriteStream(pkg_path));
+            pipe.on('finish', () => {
               cb(null, { file: pkg_path, hash: hash });
             });
           });

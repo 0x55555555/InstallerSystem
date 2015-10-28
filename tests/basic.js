@@ -1,6 +1,7 @@
 let expect = require('chai').expect,
   rimraf = require('rimraf'),
   mkdirp = require('mkdirp'),
+  mv = require('mv'),
   path = require('path'),
   fs = require('fs'),
   async = require('async'),
@@ -124,18 +125,16 @@ describe('package_manager', function() {
         pm.create_package("a", "0.0", cb);
       },
       (pkg, cb) => {
-        let dest_path = path.join(test_dir, 'test.tar');
-        let str = pkg.pack().pipe(fs.createWriteStream(dest_path));
-        str.on('finish', () => { cb(null, pkg, dest_path) });
-      },
-      (pkg, tar_path, cb) => {
-        pkg.hash((err, hash) => {
-          cb(err, hash, tar_path);
+        pkg.pack((err, hash, path) => {
+          cb(null, pkg, hash, path);
         });
       },
-      (hash, tar_path, cb) => {
-        rimraf.sync(path.join(test_dir, 'a'));
-        cb(null, hash, tar_path)
+      (pkg, hash, packed_path, cb) => {
+        let dest_path = path.join(test_dir, 'test.pkg');
+        mv(packed_path, dest_path, () => {
+          rimraf.sync(path.join(test_dir, 'a'));
+          cb(null, hash, dest_path)
+        });
       },
       (hash, path, cb) => {
         pm.load_packed_package({ hash: hash }, fs.createReadStream(path), (err, pkg) => {
@@ -199,9 +198,10 @@ describe('package_manager', function() {
         async.map(
           [ pkg0, pkg1 ],
           (pkg, cb) => {
-            let dest_path = path.join(test_dir, 'test_pork_' + pkg.version + '.tar');
-            let str = pkg.pack().pipe(fs.createWriteStream(dest_path));
-            str.on('finish', () => { cb(null, { package: pkg, packed_tar: dest_path }) });
+            let dest_path = path.join(test_dir, 'test_pork_' + pkg.version + '.pkg');
+            pkg.pack((err, hash, path) => {
+              cb(null, { package: pkg, packed_tar: path });
+            });
           },
           (err, results) => {
             let dest_path = path.join(test_dir, 'test_pork.tar.diff');
@@ -236,5 +236,4 @@ describe('package_manager', function() {
       }
     ], () => done());
   });
-
 });
