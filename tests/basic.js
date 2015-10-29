@@ -195,7 +195,17 @@ describe('package_manager', function() {
         });
       },
       (pkg0, pkg1, pkg1_hash, cb) => {
-        async.map(
+        async.waterfall(
+          (cb) => {
+            pkg0.pack((err, hash, path) => {
+              cb(null, { package: pkg0, packed_tar: path });
+            });
+          },
+          (packed0, cb) => {
+            pkg1.pack((err, hash, path, { deltas: [ pkg0 ]}) => {
+              cb(null);
+            });
+          }
           [ pkg0, pkg1 ],
           (pkg, cb) => {
             let dest_path = path.join(test_dir, 'test_pork_' + pkg.version + '.pkg');
