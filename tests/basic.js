@@ -202,6 +202,8 @@ describe('package_manager', function() {
             });
           },
           (packed0, cb) => {
+            // TODO: pack pkg1 and deltas in one?
+            ####
             pkg1.pack((err, hash, path, { deltas: [ pkg0 ]}) => {
               cb(null);
             });
