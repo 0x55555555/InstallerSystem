@@ -106,7 +106,7 @@ class Package
     return path.join(this.container, this.name, this.version + ".pkg");
   }
 
-  pack(cb)
+  pack(opts, cb)
   {
     this.hash((err, hash) => {
       var gzip = zlib.createGzip();
