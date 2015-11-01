@@ -6,7 +6,7 @@ let expect = require('chai').expect,
   fs = require('fs'),
   async = require('async'),
   zlib = require('zlib'),
-  PackageManager = require('../PackageManager')
+  PackageManager = require('../lib/PackageManager')
 
 let to_test_data_dir = path.join('tests', 'data');
 let make_test_dir = function(name, cb) {
