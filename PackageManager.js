@@ -33,6 +33,26 @@ let stream_to_buffer = function(stream, cb) {
     })
 }
 
+let generate_diff = function(tar_old_str, tar_new_str, cb) {
+  async.map(
+    [tar_old_str, tar_new_str],
+    (str, cb) => { stream_to_buffer(str, cb) },
+    (err, results) => {
+      bsdiff.diff(results[0], results[1], (err, control, diff, extra) => {
+        let output = {
+          l: results[1].length,
+          c: control,
+          d: diff,
+          e: extra
+        }
+        var BSON = new bson.BSONPure.BSON();
+        let serialised = BSON.serialize(output, false, true, false);
+        cb(err, streamifier.createReadStream(serialised));
+      });
+    }
+  );
+}
+
 let package_info_name = 'package_info.json';
 class Package
 {
@@ -95,25 +115,109 @@ class Package
     });
   }
 
-  hash(cb) {
+  hash(cb)
+  {
     let glob = path.join(this.path, '**');
     hashFiles({ files: [ glob ] }, function(err, hash) {
       cb(err, hash);
     });
   }
 
-  packed_path() {
+  packed_path()
+  {
     return path.join(this.container, this.name, this.version + ".pkg");
+  }
+
+  packed_diff_path(from_pkg)
+  {
+    return path.join(this.container, this.name, from_pkg.version + "_" + this.version + ".pkg.diff");
+  }
+
+  has_packed(cb)
+  {
+    fs.exists(this.packed_path(), (has) => {
+      cb(null, has);
+    });
   }
 
   pack(opts, cb)
   {
     this.hash((err, hash) => {
-      var gzip = zlib.createGzip();
-      let packed = require('tar-fs').pack(this.path).pipe(gzip);
+      let packed = require('tar-fs').pack(this.path).pipe(zlib.createGzip());
       let str = packed.pipe(fs.createWriteStream(this.packed_path()));
-      str.on('finish', () => { cb(null, hash, this.packed_path()) });
+      str.on('finish', () => {
+        if (opts.deltas) {
+          async.map(
+            opts.deltas,
+            (pkg, cb) => {
+              this.diff(pkg, (err, path) => {
+                cb(err, { source: pkg, dest: this, path: path });
+              });
+            },
+            (err, results) => {
+              cb(null, hash, this.packed_path(), results);
+            });
+        }
+        else {
+          cb(null, hash, this.packed_path())
+        }
+      });
     });
+  }
+
+  diff(other_pkg, cb)
+  {
+    let diff_path = this.packed_diff_path(other_pkg);
+
+    async.map(
+      [other_pkg.expected_path(), this.expected_path()],
+      (pth, cb) => { fs.exists(pth, (t) => cb(null, t) ) },
+      (err, results) => {
+        for (var r in results) {
+          if (!results[r]) {
+            return cb("Source package missing");
+          }
+        }
+
+        generate_diff(
+          fs.createReadStream(other_pkg.packed_path()).pipe(zlib.createGunzip()),
+          fs.createReadStream(this.packed_path()).pipe(zlib.createGunzip()),
+          (err, diff_stream) => {
+            let str = diff_stream.pipe(zlib.createGzip()).pipe(fs.createWriteStream(diff_path));
+
+            str.on('finish', () => {
+              cb(null, diff_path);
+            });
+          }
+        );
+      }
+    );
+  }
+
+  undiff(opts, delta, cb)
+  {
+    let packed_reader = fs.createReadStream(this.packed_path()).pipe(zlib.createGunzip());
+    let unpacked_delta = fs.createReadStream(delta).pipe(zlib.createGunzip());
+
+    async.map(
+      [packed_reader, unpacked_delta],
+      (str, cb) => { stream_to_buffer(str, cb) },
+      (err, results) => {
+        var BSON = new bson.BSONPure.BSON();
+        var diff_data = BSON.deserialize(results[1]);
+
+        bsdiff.patch(results[0], diff_data.l, diff_data.c, diff_data.d.buffer, diff_data.e.buffer,
+          (err, outData) => {
+            Package.load_packed_uncompressed(
+              this.container,
+              { hash: opts.hash },
+              streamifier.createReadStream(outData),
+              cb
+            );
+          }
+        );
+      }
+    );
   }
 
   expected_path()
@@ -133,20 +237,26 @@ class Package
 
   static load_packed(containing_folder, options, stream, cb)
   {
+    this.load_packed_uncompressed(containing_folder, options, stream.pipe(zlib.createGunzip()), cb);
+  }
+
+  static load_packed_uncompressed(containing_folder, options, stream, cb)
+  {
     let pkg = new Package(containing_folder, randomstring.generate(), '0.0');
-    var gunzip = zlib.createGunzip();
-    let str = stream.pipe(gunzip).pipe(require('tar-fs').extract(pkg.path));
-    str.on('finish', () => {
-      pkg.load_info((err, info) => {
-        pkg.relocate(info.name, info.version, () => {
-          pkg.hash((err, new_hash) => {
-            if (options.hash && new_hash != options.hash) {
-              return cb({
-                expected_hash: hash,
-                real_hash: new_hash
-              });
-            }
-            cb(null, pkg);
+    mkdirp(pkg.path, null, (err) => {
+      let str = stream.pipe(require('tar-fs').extract(pkg.path));
+      str.on('finish', () => {
+        pkg.load_info((err, info) => {
+          pkg.relocate(info.name, info.version, () => {
+            pkg.hash((err, new_hash) => {
+              if (options.hash && new_hash != options.hash) {
+                return cb({
+                  expected_hash: hash,
+                  real_hash: new_hash
+                });
+              }
+              cb(null, pkg);
+            });
           });
         });
       });
@@ -228,7 +338,7 @@ class Manager
         pkgs,
         (pkg, cb) => {
           let pkg_path = path.join(packed_pkg.path, pkg.name + '_' + pkg.version + '.tar');
-          pkg.pack((err, hash, pkg_path) => {
+          pkg.pack({}, (err, hash, pkg_path) => {
             // copy into the master directory
             let pipe = fs.createReadStream(pkg_path).pipe(fs.createWriteStream(pkg_path));
             pipe.on('finish', () => {
@@ -244,43 +354,6 @@ class Manager
         }
       );
     });
-  }
-
-  diff(tar_old_str, tar_new_str, cb) {
-    async.map(
-      [tar_old_str, tar_new_str],
-      (str, cb) => { stream_to_buffer(str, cb) },
-      (err, results) => {
-        bsdiff.diff(results[0], results[1], (err, control, diff, extra) => {
-          let output = {
-            l: results[1].length,
-            c: control,
-            d: diff,
-            e: extra
-          }
-          var BSON = new bson.BSONPure.BSON();
-          let serialised = BSON.serialize(output, false, true, false);
-          cb(err, streamifier.createReadStream(serialised));
-        });
-      }
-    );
-  }
-
-  undiff(options, tar_old_str, tar_diff_str, cb) {
-    async.map(
-      [tar_old_str, tar_diff_str],
-      (str, cb) => { stream_to_buffer(str, cb) },
-      (err, results) => {
-        var BSON = new bson.BSONPure.BSON();
-        var diff_data = BSON.deserialize(results[1]);
-
-        bsdiff.patch(results[0], diff_data.l, diff_data.c, diff_data.d.buffer, diff_data.e.buffer,
-          (err, outData) => {
-            cb(err, streamifier.createReadStream(outData));
-          }
-        );
-      }
-    );
   }
 
   create_package(name, version, cb) {

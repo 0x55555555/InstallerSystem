@@ -125,8 +125,15 @@ describe('package_manager', function() {
         pm.create_package("a", "0.0", cb);
       },
       (pkg, cb) => {
-        pkg.pack((err, hash, path) => {
-          cb(null, pkg, hash, path);
+        pkg.has_packed((err, has) => {
+          expect(has).to.equal(false);
+          pkg.pack({}, (err, hash, path) => {
+
+            pkg.has_packed((err, has) => {
+              expect(has).to.equal(true);
+              cb(null, pkg, hash, path);
+            });
+          });
         });
       },
       (pkg, hash, packed_path, cb) => {
@@ -141,6 +148,7 @@ describe('package_manager', function() {
           pkg.load_info((err, info) => {
             expect(info.name).to.equal('a');
             expect(info.version).to.equal('0.0');
+
             cb();
           });
         })
@@ -179,8 +187,6 @@ describe('package_manager', function() {
   it('load diff packages', function(done) {
     let test_dir = make_test_dir('load_diff_packages');
     let pm = PackageManager(test_dir);
-    var gzip = zlib.createGzip();
-    var gunzip = zlib.createGunzip();
 
     async.waterfall([
       (cb) => {
@@ -195,55 +201,27 @@ describe('package_manager', function() {
         });
       },
       (pkg0, pkg1, pkg1_hash, cb) => {
-        async.waterfall(
-          (cb) => {
-            pkg0.pack((err, hash, path) => {
-              cb(null, { package: pkg0, packed_tar: path });
-            });
-          },
-          (packed0, cb) => {
-            // TODO: pack pkg1 and deltas in one?
-            ####
-            pkg1.pack({ deltas: [ pkg0 ]}, (err, hash, path) => {
-              cb(null);
-            });
-          }
-          [ pkg0, pkg1 ],
-          (pkg, cb) => {
-            let dest_path = path.join(test_dir, 'test_pork_' + pkg.version + '.pkg');
-            pkg.pack((err, hash, path) => {
-              cb(null, { package: pkg, packed_tar: path });
-            });
-          },
-          (err, results) => {
-            let dest_path = path.join(test_dir, 'test_pork.tar.diff');
-            pm.diff(
-              fs.createReadStream(results[0].packed_tar),
-              fs.createReadStream(results[1].packed_tar),
-              (err, stream) => {
-                let str = stream.pipe(gzip).pipe(fs.createWriteStream(dest_path));
-                str.on('finish', () => { cb(null, results[0].packed_tar, dest_path, pkg1_hash); });
-              }
-            );
+        pkg0.pack({}, (err, hash, path) => {
+          cb(null, pkg0, pkg1);
+        });
+      },
+      (pkg0, pkg1, cb) => {
+        pkg1.pack({ deltas: [ pkg0 ]},
+          (err, hash, path, deltas) => {
+            cb(null, pkg0, deltas[0].path, hash);
           }
         );
       },
-      (original_tar, diff, pkg1_hash, cb) => {
+      (pkg0, diff, pkg1_hash, cb) => {
         pm.get_package('a').get_version('1.0').remove(() => {
-
-          pm.undiff(
+          pkg0.undiff(
             { hash: pkg1_hash },
-            fs.createReadStream(original_tar),
-            fs.createReadStream(diff).pipe(gunzip),
-            (err, stream) => {
-              pm.load_packed_package({ hash: pkg1_hash }, stream, (err, pkg) => {
-                expect(pkg.name).to.equal('a');
-                expect(pkg.version).to.equal('1.0');
-              });
+            diff,
+            (err, pkg) => {
+              expect(pkg.name).to.equal('a');
+              expect(pkg.version).to.equal('1.0');
               cb();
-            }
-          );
-          cb();
+            });
         });
       }
     ], () => done());
