@@ -14,6 +14,7 @@ var fs = require('fs'),
     bson = require('bson'),
     streamifier = require('streamifier');
 
+/// Try to make a dir, ignore if already existing
 let try_make_dir = function(path, cb) {
   mkdirp(path, null, (err) => {
     if (err && err.code != 'EEXIST') { cb(err); }
@@ -21,6 +22,7 @@ let try_make_dir = function(path, cb) {
   });
 }
 
+/// Convert a stream to a buffer
 let stream_to_buffer = function(stream, cb) {
   toArray(stream)
     .then(function (parts) {
@@ -33,7 +35,8 @@ let stream_to_buffer = function(stream, cb) {
     })
 }
 
-let generate_diff = function(tar_old_str, tar_new_str, cb) {
+/// Diff two streams, produce a stream with the diff output.
+let diff = function(tar_old_str, tar_new_str, cb) {
   async.map(
     [tar_old_str, tar_new_str],
     (str, cb) => { stream_to_buffer(str, cb) },
@@ -53,9 +56,31 @@ let generate_diff = function(tar_old_str, tar_new_str, cb) {
   );
 }
 
+/// Undiff two streams, produce a stream with the recombined output.
+let undiff = function(tar_str, diff_str, cb) {
+  async.map(
+    [tar_str, diff_str],
+    (str, cb) => { stream_to_buffer(str, cb) },
+    (err, results) => {
+      var BSON = new bson.BSONPure.BSON();
+      var diff_data = BSON.deserialize(results[1]);
+
+      bsdiff.patch(results[0], diff_data.l, diff_data.c, diff_data.d.buffer, diff_data.e.buffer,
+        (err, outData) => {
+          cb(null, streamifier.createReadStream(outData));
+        }
+      );
+    }
+  );
+}
+
 let package_info_name = 'package_info.json';
+
+/// Package is a single instance of a package,
 class Package
 {
+  /// Create a new package
+  /// \note Doesn't write anything to disk
   constructor(containing_folder, name, version) {
     this.name = name;
     this.version = version;
@@ -64,6 +89,8 @@ class Package
     this.extra_keys = { };
   }
 
+  /// Write all package info to json in package folder
+  /// \expects package dir to exist.
   save_info(cb) {
     let obj = {
       name: this.name,
@@ -81,6 +108,8 @@ class Package
     );
   }
 
+  /// Load package info from disk
+  /// \note doesn't change internal settings, but returns them to user
   load_info(cb) {
     fs.readFile(
       path.join(this.path, package_info_name),
@@ -91,14 +120,18 @@ class Package
     );
   }
 
+  /// Delete this package
+  /// \note Leaves package version folder
   remove(cb) {
     rimraf(this.path, cb);
   }
 
+  /// Set a key and value in the package data
   set(key, value) {
     this.extra_keys[key] = value;
   }
 
+  /// Move a package from its current location to [name], and [version]
   relocate(name, version, cb)
   {
     let old_location = this.path;
@@ -115,6 +148,8 @@ class Package
     });
   }
 
+  /// Generate a hash for this package's disk contents
+  /// Used to verify the package is the same at its destination
   hash(cb)
   {
     let glob = path.join(this.path, '**');
@@ -123,16 +158,19 @@ class Package
     });
   }
 
+  /// Find the location the package should be at when packed
   packed_path()
   {
     return path.join(this.container, this.name, this.version + ".pkg");
   }
 
+  /// Find the name for the diff-package which is generated from [from_pkg]
   packed_diff_path(from_pkg)
   {
     return path.join(this.container, this.name, from_pkg.version + "_" + this.version + ".pkg.diff");
   }
 
+  /// Find if a packed version of the package exists at the expected location
   has_packed(cb)
   {
     fs.exists(this.packed_path(), (has) => {
@@ -140,6 +178,9 @@ class Package
     });
   }
 
+  /// Pack this package into the [expected_pack()]
+  /// Also, if opts contains a [deltas] array of other packages
+  /// generate delta packages against them too.
   pack(opts, cb)
   {
     this.hash((err, hash) => {
@@ -165,6 +206,7 @@ class Package
     });
   }
 
+  /// Diff this package against [other_pkg]'s packed contents'
   diff(other_pkg, cb)
   {
     let diff_path = this.packed_diff_path(other_pkg);
@@ -179,7 +221,7 @@ class Package
           }
         }
 
-        generate_diff(
+        diff(
           fs.createReadStream(other_pkg.packed_path()).pipe(zlib.createGunzip()),
           fs.createReadStream(this.packed_path()).pipe(zlib.createGunzip()),
           (err, diff_stream) => {
@@ -194,37 +236,35 @@ class Package
     );
   }
 
+  /// Unpack a package using this package as a source
+  /// and [delta] as a diff package.
+  /// If opts contains a hash, use this to verify the package contents
   undiff(opts, delta, cb)
   {
     let packed_reader = fs.createReadStream(this.packed_path()).pipe(zlib.createGunzip());
     let unpacked_delta = fs.createReadStream(delta).pipe(zlib.createGunzip());
 
-    async.map(
-      [packed_reader, unpacked_delta],
-      (str, cb) => { stream_to_buffer(str, cb) },
-      (err, results) => {
-        var BSON = new bson.BSONPure.BSON();
-        var diff_data = BSON.deserialize(results[1]);
-
-        bsdiff.patch(results[0], diff_data.l, diff_data.c, diff_data.d.buffer, diff_data.e.buffer,
-          (err, outData) => {
-            Package.load_packed_uncompressed(
-              this.container,
-              { hash: opts.hash },
-              streamifier.createReadStream(outData),
-              cb
-            );
-          }
+    undiff(
+      packed_reader,
+      unpacked_delta,
+      (err, pkg_stream) => {
+        Package.load_packed_uncompressed(
+          this.container,
+          { hash: opts.hash },
+          pkg_stream,
+          cb
         );
       }
     );
   }
 
+  /// Find the expected location for the unpacked package
   expected_path()
   {
     return path.join(this.container, this.name, this.version);
   }
 
+  /// Create a new package on disk
   static create(containing_folder, name, version, cb)
   {
     let pkg = new Package(containing_folder, name, version);
@@ -235,11 +275,13 @@ class Package
     });
   }
 
+  /// Unpack a new package from packed version
   static load_packed(containing_folder, options, stream, cb)
   {
     this.load_packed_uncompressed(containing_folder, options, stream.pipe(zlib.createGunzip()), cb);
   }
 
+    /// Unpack a new (uncompressed) package from packed version
   static load_packed_uncompressed(containing_folder, options, stream, cb)
   {
     let pkg = new Package(containing_folder, randomstring.generate(), '0.0');
@@ -264,6 +306,7 @@ class Package
   }
 }
 
+/// Manage multiple versions of a single package
 class VersionManager
 {
   constructor(dir, name) {
@@ -271,10 +314,12 @@ class VersionManager
     this.name = name;
   }
 
+  /// Get the package [version]
   get_version(version) {
     return new Package(this.package_dir, this.name, version);
   }
 
+  /// Find the installed (unpacked) versions of this package
   installed_versions(cb) {
     let that = this;
     fs.readdir(path.join(this.package_dir, this.name), function(err, versions) {
@@ -304,8 +349,10 @@ class VersionManager
   }
 }
 
+/// Manage of multiple packages, and their versions
 class Manager
 {
+  /// Create a new manager, callback when fully setup
   constructor(dir, cb)
   {
     this.package_dir = dir
@@ -315,6 +362,7 @@ class Manager
     });
   }
 
+  /// Find all installed packages (VersionManagers for each package)
   installed_packages(cb) {
     let that = this;
     fs.readdir(this.package_dir, function(err, files) {
@@ -332,6 +380,7 @@ class Manager
     });
   }
 
+  /// Combine many packages into a single new package
   combine(name, version, pkgs, cb) {
     this.create_package(name, version, (err, packed_pkg) => {
       async.map(
@@ -356,14 +405,17 @@ class Manager
     });
   }
 
+  /// Create a new package
   create_package(name, version, cb) {
     return Package.create(this.package_dir, name, version, cb);
   }
 
+  /// Load a packed package
   load_packed_package(options, stream, cb) {
     return Package.load_packed(this.package_dir, options, stream, cb);
   }
 
+  /// Find a version manager for [name]
   get_package(name) {
     return new VersionManager(this.package_dir, name)
   }
