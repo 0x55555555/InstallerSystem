@@ -6,7 +6,7 @@ let expect = require('chai').expect,
   fs = require('fs'),
   async = require('async'),
   zlib = require('zlib'),
-  PackageManager = require('../lib/PackageManager')
+  PackageManager = require('../lib/git loPackageManager')
 
 let to_test_data_dir = path.join('tests', 'data');
 let make_test_dir = function(name, cb) {
@@ -189,22 +189,26 @@ describe('package_manager', function() {
     let pm = PackageManager(test_dir);
 
     async.waterfall([
+      // Create package a v0.0
       (cb) => {
         pm.create_package("a", "0.0", cb);
       },
+      // Create package a v1.0
       (pkg0, cb) => {
         pm.create_package("a", "1.0", (err, pkg1) => {
-
+          // Pass on packages and hash
           pkg1.hash((err, hash) => {
             cb(null, pkg0, pkg1, hash);
           });
         });
       },
+      // Pack package 0 with no deltas
       (pkg0, pkg1, pkg1_hash, cb) => {
         pkg0.pack({}, (err, hash, path) => {
           cb(null, pkg0, pkg1);
         });
       },
+      // Pack package 1 with delta to 0
       (pkg0, pkg1, cb) => {
         pkg1.pack({ deltas: [ pkg0 ]},
           (err, hash, path, deltas) => {
@@ -212,8 +216,10 @@ describe('package_manager', function() {
           }
         );
       },
+      // now remove the old 1.0 package and regenerate from delta
       (pkg0, diff, pkg1_hash, cb) => {
         pm.get_package('a').get_version('1.0').remove(() => {
+          // undiff generates a new package from [pkg0] from a delta.
           pkg0.undiff(
             { hash: pkg1_hash },
             diff,
