@@ -224,6 +224,7 @@ describe('package_manager', function() {
             { hash: pkg1_hash },
             diff,
             (err, pkg) => {
+              // pkg is the unpacked package, added to pm
               expect(pkg.name).to.equal('a');
               expect(pkg.version).to.equal('1.0');
               cb();
